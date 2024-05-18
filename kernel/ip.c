@@ -8,6 +8,7 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/types.h>
+#include <linux/percpu-defs.h>
 #include "log.h"
 #include "ip.h"
 
@@ -17,21 +18,35 @@
  * */
 struct radix_tree_root ip_tree;
 
+static DEFINE_PER_CPU(ip_desc *, ipcache) = NULL;
+
 int ip_in_whitelist( u32 ip )
 {
     ip_desc *desc;
+    desc = this_cpu_read(ipcache);
+    if( desc && ( desc->flags & IP_WHITELIST_MASK) ){
+        if( desc->ip == ip ) return 1;
+    }
     desc = radix_tree_lookup(&ip_tree, ip);
-    if( !desc ) return 0;
-    if( desc->flags & IP_WHITELIST_MASK ) return 1;
+    if( desc && ( desc->flags & IP_WHITELIST_MASK) ){
+        this_cpu_write(ipcache, desc);
+        return 1;
+    }
     return 0;
 }
 
 int ip_in_blacklist( u32 ip )
 {
     ip_desc *desc;
+    desc = this_cpu_read(ipcache);
+    if( desc && ( desc->flags & IP_BLACKLIST_MASK) ){
+        if( desc->ip == ip ) return 1;
+    }
     desc = radix_tree_lookup(&ip_tree, ip);
-    if( !desc ) return 0;
-    if( desc->flags & IP_BLACKLIST_MASK ) return 1;
+    if( desc && ( desc->flags & IP_BLACKLIST_MASK) ){
+        this_cpu_write(ipcache, desc);
+        return 1;
+    }
     return 0;
 }
 
@@ -39,17 +54,18 @@ int ip_in_blacklist( u32 ip )
  * Create a node to the tree if new ip comes,
  * or add mark to the ip_desc of existing node
  */
-int insert_ip( u32 ip, ip_desc *desc )
+int insert_ip( void *p )
 {
     int error = 0;
+    ip_desc *desc = p;
     ip_desc *res;
-    res = radix_tree_lookup(&ip_tree, ip);
-    logs("Add ip %x", ip)
+    res = radix_tree_lookup(&ip_tree, desc->ip);
+    logs("Add ip %x", desc->ip)
     if( !res){
         res = kmalloc(sizeof(*res), GFP_KERNEL);
         *res = *desc;
-        error = radix_tree_insert( &ip_tree, ip, res);
-        if( error ) logs("fail insert: ip %u error %d", ip, error);
+        error = radix_tree_insert( &ip_tree, desc->ip, res);
+        if( error ) logs("fail insert: ip %u error %d", desc->ip, error);
     }else{
         res->flags |= desc->flags;
     }
@@ -62,24 +78,25 @@ int insert_ip( u32 ip, ip_desc *desc )
  * Notice that a tree node may contain multi status, 
  * so only when the flag is marked by no status, the node can be delete from the tree.
  * */
-void delete_ip( u32 ip, ip_desc *desc )
+int delete_ip( void *p )
 {
+    ip_desc *desc = p;
     f_type flag = 0;
     ip_desc *res;
-    res = radix_tree_lookup(&ip_tree, ip);
+    res = radix_tree_lookup(&ip_tree, desc->ip);
     if( !res){
-        logs("fail delete: no ip %u", ip);
-        return;
+        logs("fail delete: no ip %u", desc->ip);
+        return 1;
     }
-    logs("Delete %x\n", ip);
+    logs("Delete %x\n", desc->ip);
     res->flags &= (~desc->flags);
     flag = (1 << F_MAX) - 1;
     if( (res->flags & flag) == 0) {
-        radix_tree_delete(&ip_tree, ip);
+        radix_tree_delete(&ip_tree, desc->ip);
         synchronize_rcu();
         kfree(res);
     }
-    return;
+    return 0;
 }
 
 
@@ -94,8 +111,9 @@ struct ip_list{
 /*
  * malloc a ip_list for given size [num], 
  * resize [list] if it is not NULL
+ *
+ * !!Notice: Remember to free list after call this
  * */
-
 static struct ip_list* build_ip_list( struct ip_list* list, int num )
 {
     struct ip_list *old;
@@ -118,8 +136,8 @@ static struct ip_list* build_ip_list( struct ip_list* list, int num )
     return list;
 }
 
-static struct ip_list *blacklist ;
-static struct ip_list *whitelist ;
+static struct ip_list *blacklist = NULL ;
+static struct ip_list *whitelist = NULL;
 
 void get_ip_list(void)
 {
@@ -168,6 +186,7 @@ int get_ip_whitelist(char* str, int len)
     int i;
     char *end = str + len;
     get_ip_list();
+    str[0] = 0;
     for(i=0; i<whitelist->num; i++){
         index = sprintf(str, "%x\n", whitelist->ip[i]);
         if( index > 0 ) str+= index;
@@ -176,6 +195,8 @@ int get_ip_whitelist(char* str, int len)
             return i;
         }
     }
+    kfree(whitelist);
+    whitelist = NULL;
     return i;
 }
 
@@ -184,6 +205,7 @@ int get_ip_blacklist(char* str, int len)
     int index = 0;
     int i;
     char *end = str + len;
+    str[0] = 0;
     get_ip_list();
     for(i=0; i<blacklist->num; i++){
         index = sprintf(str, "%x\n", blacklist->ip[i]);
@@ -193,10 +215,12 @@ int get_ip_blacklist(char* str, int len)
             return i;
         }
     }
+    kfree(blacklist);
+    blacklist = NULL;
     return i;
 }
 
-void destroy_iptree( void )
+void fw_ip_exit( void )
 {
     struct radix_tree_iter iter;
     void **slot;
@@ -207,7 +231,7 @@ void destroy_iptree( void )
     }
 }
 
-void init_iptree(void )
+void fw_ip_init(void )
 {
 	INIT_RADIX_TREE(&ip_tree, GFP_KERNEL);
     whitelist = NULL;

@@ -21,15 +21,22 @@ static void get_path_type(struct file *file, enum F_IP_LIST_TYPE *listtype, enum
 {
     char *opsname;
     char *listname;
+    char *ipname;
     opsname = file->f_path.dentry->d_iname;
     if( strcmp( opsname, "add") == 0) *proctype = add;
     else if( strcmp( opsname, "delete") == 0) *proctype = delete;
     else if( strcmp( opsname, "show") == 0) *proctype = show;
 
     listname = file->f_path.dentry->d_parent->d_iname;
-    if( strcmp( listname, "whitelist") == 0) *listtype= F_IP_WHITELIST;
-    else if( strcmp( listname, "blacklist") == 0) *listtype= F_IP_BLACKLIST;
-    logs("%s %s", listname, opsname);
+    ipname = file->f_path.dentry->d_parent->d_parent->d_iname;
+    if( strcmp( ipname, IP_NAME) == 0){
+        if( strcmp( listname, "whitelist") == 0) *listtype= F_IP_WHITELIST;
+        else if( strcmp( listname, "blacklist") == 0) *listtype= F_IP_BLACKLIST;
+    } else if( strcmp( ipname, CIDR_NAME) == 0){
+        if( strcmp( listname, "whitelist") == 0) *listtype= F_CIDR_WHITELIST;
+        else if( strcmp( listname, "blacklist") == 0) *listtype= F_CIDR_BLACKLIST;
+    }
+    logs("%s %s %s", ipname, listname, opsname);
 }
 
 
@@ -63,6 +70,10 @@ static ssize_t ip_read(struct file *file, char __user *user_buffer, size_t count
         get_ip_whitelist(data, 4096<<pagenum);
     } else if( (listtype == F_IP_BLACKLIST) && (proctype == show) ){
         get_ip_blacklist(data, 4096<<pagenum);
+    }else if( (listtype == F_CIDR_WHITELIST) && (proctype == show) ){
+        get_cidr_whitelist(data, 4096<<pagenum);
+    }else if( (listtype == F_CIDR_BLACKLIST) && (proctype == show) ){
+        get_cidr_blacklist(data, 4096<<pagenum);
     }
     len = strlen(data);
     if(len >= count ) {
@@ -81,16 +92,50 @@ static ssize_t ip_read(struct file *file, char __user *user_buffer, size_t count
     }
 }
 
+int parse_str_ip( char *str, void *p)
+{
+    ip_desc *desc = p;
+    if(in4_pton(str, -1, (u8 *)&desc->ip, -1, NULL) == 0){
+        return 0;
+    }
+    desc->ip = ntohl( desc->ip);
+    return 1;
+}
+
+int parse_str_cidr( char *str, void *_desc)
+{
+    cidr_desc *desc = _desc;
+    char *p = str;
+    if(strlen(str) == 0) return 0;
+    while( *p != '/' ){
+        p++;
+        if( (p-str) > 18 ) return 0; /* out of bound */
+    }
+    *p = 0;
+    p++;
+    if(in4_pton(str, -1, (u8 *)&desc->ip, -1, NULL) == 0){
+        return 0;
+    }
+    desc->ip = ntohl( desc->ip);
+    if( kstrtou8( p, 10, &desc->mask) == 1 ){
+        logs("");
+        return 0;
+    }
+    return 1;
+}
+
 static ssize_t ip_write(struct file *file, const char __user *user_buffer, size_t count, loff_t *ppos)
 {
     char *buffer;
     ssize_t ret;
-    u32 ip;
     char *p;
-    ip_desc desc;
+    void *desc;
+    ip_desc ipdesc;
+    cidr_desc cidrdesc;
     enum F_IP_LIST_TYPE listtype;
     enum proc_type proctype;
-
+    int (*parse)( char*,  void *);
+    int (*work)( void *);
     get_path_type(file, &listtype, &proctype);
     if( proctype >= show ){
         logs("Not allowed to write");
@@ -108,31 +153,56 @@ static ssize_t ip_write(struct file *file, const char __user *user_buffer, size_
     } 
     buffer[count] = 0;
     *ppos = count;
+    switch( listtype ){
+        case F_IP_WHITELIST:
+           ipdesc.flags = IP_WHITELIST_MASK; 
+           desc = &ipdesc;
+           parse = parse_str_ip;
+           break;
+        case F_IP_BLACKLIST :
+           ipdesc.flags = IP_BLACKLIST_MASK;
+           desc = &ipdesc;
+           parse = parse_str_ip;
+           break;
+        case F_CIDR_WHITELIST:
+           cidrdesc.flags = CIDR_WHITELIST_MASK;
+           desc = &cidrdesc;
+           parse = parse_str_cidr;
+           break;
+        case F_CIDR_BLACKLIST:
+           cidrdesc.flags = CIDR_BLACKLIST_MASK;
+           desc = &cidrdesc;
+           parse = parse_str_cidr;
+           break;
+        default:
+           logs("Wrong list type");
+    }
+    switch( proctype ){
+        case add:
+            if((listtype == F_IP_WHITELIST) || (listtype == F_IP_BLACKLIST))
+                work = insert_ip;
+            else if((listtype == F_CIDR_WHITELIST) || (listtype == F_CIDR_BLACKLIST))
+                work = insert_cidr;
+            break;
+        case delete:
+            if((listtype == F_IP_WHITELIST) || (listtype == F_IP_BLACKLIST))
+                work = delete_ip;
+            else if((listtype == F_CIDR_WHITELIST) || (listtype == F_CIDR_BLACKLIST))
+                work = delete_cidr;
+            break;
+        case show:
+            break;
+    }
 
     mutex_lock(&proc_mutex);
 	while ((p = strsep(&buffer, " |\n|\t|,")) != NULL) {
-        if(in4_pton(p, -1, (u8 *)&ip, -1, NULL) == 0){
+
+        if(parse(p, desc) == 0){
             if( strlen( p ) > 0 )
                 logs("Fails to parse %s", p);
             continue;
         }
-        desc.flags = 0;
-        if( listtype == F_IP_WHITELIST ) desc.flags |= IP_WHITELIST_MASK;
-        else if( listtype == F_IP_BLACKLIST ) desc.flags |= IP_BLACKLIST_MASK;
-        else {
-            logs("Wrong list type");
-            continue;
-        }
-        switch( proctype ){
-            case add:
-                insert_ip( ip, &desc);
-                break;
-            case delete:
-                delete_ip( ip, &desc);
-                break;
-            case show:
-                break;
-        }
+        work(desc);
 	}
     kfree(buffer);
     mutex_unlock(&proc_mutex);
@@ -162,7 +232,14 @@ struct fw_procfs_ops {
 };
 
 struct fw_procfs_ops ip_ops = {
-    .name = "ip",
+    .name = IP_NAME,
+    .add = ip_add_fops,
+    .delete = ip_delete_fops,
+    .show = ip_show_fops,
+};
+
+struct fw_procfs_ops cidr_ops = {
+    .name = CIDR_NAME,
     .add = ip_add_fops,
     .delete = ip_delete_fops,
     .show = ip_show_fops,
@@ -172,9 +249,9 @@ static void create_proc_tree( struct fw_procfs_ops *ops )
 {
     struct proc_dir_entry *folder;
     char path[100];
-    folder= proc_mkdir(FW_PROC, NULL);
     sprintf(path, "%s/%s", FW_PROC, ops->name);
     folder= proc_mkdir(path, NULL);
+
     sprintf(path, "%s/%s/whitelist", FW_PROC, ops->name);
     folder= proc_mkdir(path, NULL);
     /* /proc/simplefirewall/???/whitelist/[add/delete/show] */
@@ -202,13 +279,16 @@ static void destroy_proc_tree( char *tree )
 int fw_proc_init( void )
 {
     mutex_init(&proc_mutex);
+    proc_mkdir(FW_PROC, NULL);
     create_proc_tree( &ip_ops );
+    create_proc_tree( &cidr_ops );
     return 0;
 }
 
 void fw_proc_exit( void )
 {
-    destroy_proc_tree( "ip" );
+    destroy_proc_tree( IP_NAME );
+    destroy_proc_tree( CIDR_NAME );
     remove_proc_subtree(FW_PROC, NULL);
 }
 

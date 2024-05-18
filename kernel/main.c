@@ -6,7 +6,8 @@
 
 static int __init fw_module_init(void)
 {
-    init_iptree();
+    fw_ip_init();
+    fw_cidr_init();
     fw_proc_init();
     fw_net_init();
     printk(KERN_INFO "simplefirewall initialized\n");
@@ -17,7 +18,8 @@ static void __exit fw_module_exit(void)
 {   
     fw_net_exit();
     fw_proc_exit();
-    destroy_iptree();
+    fw_cidr_exit();
+    fw_ip_exit();
     printk(KERN_INFO "simplefirewall exited\n");
 }
 

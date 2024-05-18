@@ -11,6 +11,8 @@
 
 extern int ip_in_whitelist( u32 ip );
 extern int ip_in_blacklist( u32 ip );
+extern int ip_in_cidr_whitelist( u32 ip );
+extern int ip_in_cidr_blacklist( u32 ip );
 
 static unsigned int
 fw_filter(void *priv, struct sk_buff *skb, const struct nf_hook_state *state)
@@ -27,11 +29,19 @@ fw_filter(void *priv, struct sk_buff *skb, const struct nf_hook_state *state)
         return NF_ACCEPT;
     }
     ip_header = ip_hdr(skb);
-    ip = ip_header->saddr;
-    //ip = ntohl( ip_header->saddr );
+    //ip = ip_header->saddr;
+    ip = ntohl( ip_header->saddr );
+    ret = ip_in_cidr_blacklist(ip);
+    if( unlikely( ret ) ){
+        return NF_DROP;
+    }
     ret = ip_in_blacklist(ip);
     if( unlikely( ret ) ){
         return NF_DROP;
+    }
+    ret = ip_in_cidr_whitelist(ip);
+    if( likely( ret ) ){
+        return NF_ACCEPT;
     }
     ret = ip_in_whitelist(ip);
     if( likely( ret ) ){
