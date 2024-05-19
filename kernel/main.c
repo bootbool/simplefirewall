@@ -2,12 +2,14 @@
 #include "ip.h" 
 #include "procfs.h" 
 #include "netfilter.h" 
+#include "port.h" 
 
 
 static int __init fw_module_init(void)
 {
     fw_ip_init();
     fw_cidr_init();
+    fw_port_init();
     fw_proc_init();
     fw_net_init();
     printk(KERN_INFO "simplefirewall initialized\n");
@@ -18,6 +20,7 @@ static void __exit fw_module_exit(void)
 {   
     fw_net_exit();
     fw_proc_exit();
+    fw_port_exit();
     fw_cidr_exit();
     fw_ip_exit();
     printk(KERN_INFO "simplefirewall exited\n");

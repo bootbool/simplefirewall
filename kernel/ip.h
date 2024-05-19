@@ -1,27 +1,13 @@
+#ifndef _IP_H
+#define _IP_H
+
 /*
  * For filter IP addresses.
  * single IP is inserted into radix tree.
  * CIDR IP is indexed by hash function.
  * */
 
-#ifndef _IP_H
-#define _IP_H
-
-#define IP_NAME ("ip")
-#define CIDR_NAME ("cidr")
-
-enum F_IP_LIST_TYPE{
-    F_IP_WHITELIST,
-    F_IP_BLACKLIST,
-    F_CIDR_WHITELIST,
-    F_CIDR_BLACKLIST,
-    F_MAX
-};
-
-#define IP_WHITELIST_MASK ( 1 << F_IP_WHITELIST)
-#define IP_BLACKLIST_MASK ( 1 << F_IP_BLACKLIST)
-#define CIDR_WHITELIST_MASK ( 1 << F_CIDR_WHITELIST)
-#define CIDR_BLACKLIST_MASK ( 1 << F_CIDR_BLACKLIST)
+#include "common.h"
 
 #define f_type u8
 

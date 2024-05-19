@@ -101,7 +101,7 @@ int delete_ip( void *p )
 
 
 struct ip_list{
-    enum F_IP_LIST_TYPE type;   // whitelist or blacklist?
+    enum F_LIST_TYPE type;   // whitelist or blacklist?
     int num;   // number of ip in list
     int maxnum;
     u32 ip[0];
