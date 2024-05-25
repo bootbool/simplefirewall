@@ -15,11 +15,20 @@ extern int ip_in_blacklist( u32 ip );
 extern int ip_in_cidr_whitelist( u32 ip );
 extern int ip_in_cidr_blacklist( u32 ip );
 
+static inline int is_new_connection(struct sk_buff *skb)
+{
+    struct nf_conn *ct;
+    enum ip_conntrack_info ctinfo;
+
+    ct = nf_ct_get(skb, &ctinfo);
+    return !((ctinfo % IP_CT_IS_REPLY) == IP_CT_ESTABLISHED ||
+             (ctinfo % IP_CT_IS_REPLY) == IP_CT_RELATED);
+}
+
 static unsigned int
 fw_filter(void *priv, struct sk_buff *skb, const struct nf_hook_state *state)
 {
     enum ip_conntrack_info ctinfo;
-    struct nf_conn *ct;
     struct iphdr *ip_header;
     struct tcphdr *tcp_header;
     struct udphdr *udp_header;
@@ -28,8 +37,8 @@ fw_filter(void *priv, struct sk_buff *skb, const struct nf_hook_state *state)
     int ret;
 
     ip_header = ip_hdr(skb);
-	ct = nf_ct_get(skb, &ctinfo);
-    if( ct ){
+    ret = is_new_connection(skb);
+    if( ret ){
         return NF_ACCEPT;
     }
     ip_header = ip_hdr(skb);
